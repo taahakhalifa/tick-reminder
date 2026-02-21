@@ -1,12 +1,23 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { registerServiceWorker, subscribeToPush, getExistingSubscription } from './pushUtils';
+import CalendarView from './CalendarView';
 
 // ============================================
 // CONSTANTS
 // ============================================
 const CIRCUMFERENCE = 2 * Math.PI * 88;
 const STORAGE_KEY = 'tickreminder_v4';
+
+const MILESTONES = [
+  { days: 7,  message: '1 week strong! Keep it up.' },
+  { days: 14, message: '2 weeks of consistency. Impressive.' },
+  { days: 21, message: '3 weeks — a habit is forming.' },
+  { days: 30, message: '1 full month. Remarkable discipline.' },
+  { days: 60, message: '60 days. You are truly committed.' },
+  { days: 90, message: '90 days! A transformation.' },
+];
 
 const MODES = {
   normal: {
@@ -137,6 +148,14 @@ export default function TickReminder() {
     if (typeof Notification !== 'undefined') {
       setNotifPerm(Notification.permission);
     }
+    // Register service worker for push notifications
+    registerServiceWorker();
+    // Sync initial state to server
+    fetch('/api/tick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ todayDate: s.todayDate, todayTicked: s.todayTicked, mode: s.mode }),
+    }).catch(() => {});
   }, []);
 
   // Save on state change
@@ -173,11 +192,29 @@ export default function TickReminder() {
       // Cycle rollover
       const cd = getCycleDate(state.mode);
       if (state.todayDate !== cd) {
-        setState(loadState());
+        const newState = loadState();
+        setState(newState);
+        // Sync new cycle to server
+        fetch('/api/tick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ todayDate: newState.todayDate, todayTicked: newState.todayTicked, mode: newState.mode }),
+        }).catch(() => {});
       }
     }, 1000);
     return () => clearInterval(iv);
   }, [state?.mode, state?.todayDate]);
+
+  // Tab title countdown
+  useEffect(() => {
+    if (!state || !mounted) return;
+    if (state.todayTicked) {
+      document.title = 'Tick Reminder';
+    } else {
+      document.title = `${formatCountdown(msLeft)} - Tick Reminder`;
+    }
+    return () => { document.title = 'Tick Reminder'; };
+  }, [msLeft, state?.todayTicked, mounted]);
 
   // Notification checker
   useEffect(() => {
@@ -279,19 +316,25 @@ export default function TickReminder() {
     return streak;
   }
   const streak = getStreak();
-  const streakDays = [
-    ...state.history.slice(-13),
-    { date: state.todayDate, tickedAt: state.todayTickedAt, missed: false },
-  ];
+  const currentMilestone = MILESTONES.filter(ms => streak >= ms.days).pop() || null;
 
   // ---- ACTIONS ----
   function confirmTick() {
     const now = Date.now();
-    setState((prev) => ({ ...prev, todayTicked: true, todayTickedAt: now }));
+    setState((prev) => {
+      const newState = { ...prev, todayTicked: true, todayTickedAt: now };
+      // Sync to server so cron stops sending notifications
+      fetch('/api/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ todayDate: newState.todayDate, todayTicked: true, mode: newState.mode }),
+      }).catch(() => {});
+      return newState;
+    });
     setView('main');
     if (notifPerm === 'granted') {
       try {
-        new Notification('✅ Tick recorded!', { body: 'Well done — your streak continues.', tag: 'tick-confirmed' });
+        new Notification('Tick recorded!', { body: 'Well done — your streak continues.', tag: 'tick-confirmed' });
       } catch (e) {}
     }
   }
@@ -315,18 +358,25 @@ export default function TickReminder() {
 
   async function requestNotifs() {
     if (typeof Notification === 'undefined') {
-      alert('Add this site to your Home Screen first (Safari → Share → Add to Home Screen), then notifications will work.');
+      alert('Add this site to your Home Screen first (Safari > Share > Add to Home Screen), then notifications will work.');
       return;
     }
     try {
       const result = await Notification.requestPermission();
       setNotifPerm(result);
       if (result === 'granted') {
-        new Notification('✅ Notifications enabled', { body: "You'll be reminded before every deadline." });
+        // Subscribe to push notifications for background delivery
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await getExistingSubscription(reg);
+        if (!existing) {
+          await subscribeToPush(reg);
+        }
+        new Notification('Notifications enabled', { body: "You'll be reminded before every deadline — even when the app is closed." });
       } else {
         alert('Notifications blocked. Enable in phone settings.');
       }
     } catch (e) {
+      console.error('Notification setup error:', e);
       alert('Could not enable notifications. Try adding to Home Screen first.');
     }
   }
@@ -664,20 +714,23 @@ export default function TickReminder() {
           <div className="card-value">{streak}</div>
           <div className="card-detail">{streak === 1 ? 'day' : 'days in a row'}</div>
         </div>
-        <div className="streak-dots">
-          {streakDays.map((d, i) => {
-            const isHit = d.tickedAt || (d.date === state.todayDate && state.todayTicked);
-            const isMiss = d.missed;
-            return (
-              <div
-                key={i}
-                className={`streak-dot ${isHit ? 'hit' : ''} ${isMiss ? 'miss' : ''}`}
-                title={d.date}
-              />
-            );
-          })}
-        </div>
       </div>
+
+      {/* Milestone */}
+      {currentMilestone && state.todayTicked && (
+        <div className="milestone-card">
+          <div className="milestone-icon">&#9733;</div>
+          <div className="milestone-text">{currentMilestone.message}</div>
+          <div className="milestone-days">{currentMilestone.days}-day milestone reached</div>
+        </div>
+      )}
+
+      {/* Calendar */}
+      <CalendarView
+        history={state.history}
+        todayDate={state.todayDate}
+        todayTicked={state.todayTicked}
+      />
 
       {/* Today card */}
       <div className="card">
@@ -885,26 +938,31 @@ export default function TickReminder() {
           color: var(--text-dim);
           font-style: italic;
         }
-        .streak-dots {
-          display: flex;
-          gap: 6px;
-          margin-top: 10px;
-          flex-wrap: wrap;
+        .milestone-card {
+          width: 100%;
+          background: linear-gradient(135deg, #2a2519 0%, #1a1610 100%);
+          border: 1px solid var(--gold);
+          padding: 18px;
+          margin-bottom: 10px;
+          text-align: center;
         }
-        .streak-dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          background: var(--bg);
-          border: 1px solid var(--gold-dim);
+        .milestone-icon {
+          font-size: 28px;
+          color: var(--gold-bright);
+          margin-bottom: 4px;
         }
-        .streak-dot.hit {
-          background: var(--green);
-          border-color: var(--green);
+        .milestone-text {
+          font-family: 'Playfair Display', serif;
+          font-size: 17px;
+          color: var(--cream);
+          font-style: italic;
+          margin-bottom: 4px;
         }
-        .streak-dot.miss {
-          background: var(--red);
-          border-color: var(--red);
+        .milestone-days {
+          font-size: 12px;
+          color: var(--gold-dim);
+          letter-spacing: 2px;
+          text-transform: uppercase;
         }
         .isha-footer {
           width: 100%;
