@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+
+:root {
+  --bg: #1a1610;
+  --bg-card: #231f18;
+  --bg-card-alt: #2a2519;
+  --cream: #f5f0ea;
+  --gold: #c5a97a;
+  --gold-dim: #8b7355;
+  --gold-bright: #dfc89a;
+  --brown: #4a3f35;
+  --red: #c45c4a;
+  --red-glow: #e8634f;
+  --green: #6a9f5c;
+  --green-glow: #7ec46a;
+  --text: #e8e0d4;
+  --text-dim: #9a8e7e;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: 'Cormorant Garamond', 'Georgia', serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+@keyframes pulse-urgent {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.pulse { animation: pulse-urgent 1.5s ease-in-out infinite; }
